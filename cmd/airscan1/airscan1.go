@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/brutella/dnssd"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/google/renameio/v2"
 	"github.com/stapelberg/airscan"
 	"github.com/stapelberg/airscan/preset"
@@ -112,55 +111,30 @@ func airscan1() error {
 	ctx, canc := context.WithCancel(context.Background())
 	defer canc()
 
-	// No -host parameter? Do a discovery to list compatible devices
-	discovery := sc.host == ""
-	if discovery {
-		log.Printf("discovering all airscan devices in the local network (timeout: %v)", *timeout)
-	} else {
-		log.Printf("finding device %q for %v (use -timeout=0 for unlimited)", sc.host, *timeout)
-	}
 	if *timeout > 0 {
 		ctx, canc = context.WithTimeout(ctx, *timeout)
 		defer canc()
 	}
-
-	discoverStart := time.Now()
-
-	addFn := func(service dnssd.BrowseEntry) {
-		if sc.debug {
-			log.Printf("DNSSD service discovered: %v", spew.Sdump(service))
+	// No -host parameter? Do a discovery to list compatible devices
+	if sc.host == "" {
+		log.Printf("discovering all airscan devices in the local network (timeout: %v)", *timeout)
+		if err := discoverInteractive(ctx, sc.debug); err != nil {
+			return err
 		}
-
-		humanName := humanDeviceName(service)
-		if sc.host != "" && sc.host == service.Host {
-			canc()
-			log.Printf("device %q found in %v", humanName, time.Since(discoverStart))
-			sc.service = &service
-			return
-		}
-
-		log.Printf("device %q discovered (use -host=%q)", humanName, service.Host)
+		return nil
 	}
 
-	rmvFn := func(srv dnssd.BrowseEntry) {
-		log.Printf("device %q vanished", humanDeviceName(srv))
-	}
-
-	// addFn and rmvFn are always called (sequentially) from the same goroutine,
-	// i.e. no locking is required.
-	if err := dnssd.LookupType(ctx, airscan.ServiceName, addFn, rmvFn); err != nil &&
-		err != context.Canceled &&
-		err != context.DeadlineExceeded {
+	log.Printf("finding device %q for %v (use -timeout=0 for unlimited)", sc.host, *timeout)
+	lookupStart := time.Now()
+	var err error
+	sc.service, err = lookup(ctx, sc.host)
+	if err != nil {
 		return err
 	}
-
-	if discovery {
-		return nil // only discovery requested, exit instead of scanning
-	}
-
 	if sc.service == nil {
 		return fmt.Errorf("scanner %q not found", sc.host)
 	}
+	log.Printf("device %q found in %v", humanDeviceName(*sc.service), time.Since(lookupStart))
 
 	if *conntest {
 		log.Println("testing reachability of all addresses:")
